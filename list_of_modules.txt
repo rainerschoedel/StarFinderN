@@ -224,6 +224,11 @@ READ_FLOAT_DATA
 Read a Free Format file containing floating-point
 numbers, ordered by columns.
 
+MIN_PAIR_DISTANCE
+Minimum euclidean distance among all pairs of a set of
+points on a plane, with early-exit (replaces
+min(reciprocal_distance(x,y)) in STARFINDER_CHECK).
+
 RECIPROCAL_DISTANCE
 Compute the euclidean distance for each couple of
 points in a set of given points on a plane.

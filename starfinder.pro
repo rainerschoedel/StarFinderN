@@ -782,7 +782,7 @@ FUNCTION starfinder_check, fit_error, x_fit, y_fit, f_fit, $
 	                   UY = uy + fit_par.min_distance[r], list, n)
 	   extract_elements, list, SUBSCRIPTS = s, n, x, y, f
 	   if  n gt 1  then $
-	      good = min(reciprocal_distance(x, y)) ge fit_par.min_distance[r]
+	      good = min_pair_distance(x, y, THRESHOLD = fit_par.min_distance[r]) ge fit_par.min_distance[r]
 	endif
 	return, good
 end
@@ -1006,23 +1006,17 @@ PRO starfinder, $
    	x, y, fluxes, sigma_x, sigma_y, sigma_f, correlation, STARS = stars, $
         LOGFILE = logfilename
 
-print, "Starfinder:"
-print, "Estimate bg = ", estim_bg
-;print, "BACK_BOX = ", back_box
-print, "threshold= ", threshold, ", REL_THRESHOLD = ", rel_threshold
-print, "min_correlation = ",min_correlation
-print, "DEBLEND = ",deblend
-;print, "DEBLOST = ",deblost
-;print, "_EXTRA = ",extra
-print, "N_ITER = ",n_iter
-;print, "NO_INTERMEDIATE_ITER = ", no_intermediate
-;print, "GUIDE_X = ",guide_x,", GUIDE_Y = ",guide_y
-;print, "SV_SIGMA_R = ",sv_sigma_r,", SV_SIGMA_a = ",sv_sigma_a
-;print, 'HELLO!'
-;STOP
+	if  not keyword_set(silent) then begin
+		print, "Starfinder:"
+		print, "Estimate bg = ", estim_bg
+		print, "threshold= ", threshold, ", REL_THRESHOLD = ", rel_threshold
+		print, "min_correlation = ",min_correlation
+		print, "DEBLEND = ",deblend
+		print, "N_ITER = ",n_iter
+	endif
 
 	if  not keyword_set(logfilename) then logfilename = "" $
-        else print, "LOGFILE = ",logfilename
+        else if not keyword_set(silent) then print, "LOGFILE = ",logfilename
 
 	;;catch, error
 	;;if  error ne 0  then begin
@@ -1115,10 +1109,12 @@ print, "N_ITER = ",n_iter
 	   list_of_stars = merge_list(list_of_stars, sort_list(list_of_max))
 
            if  logfp ne ""  then printf,logfp, "analysing star ", n_stars, " to ", n_stars - 1 + n_max
+           if  not keyword_set(silent) then $
            print, "analysing star ", n_stars, " to ", n_stars - 1 + n_max
 	   for  n = n_stars, n_stars - 1 + n_max  do begin
                if  logfp ne ""  then printf,logfp,"star no.",n
                if (guide_x NE "") then begin
+                   if  not keyword_set(silent) then $
                    print, "making local psf for star ", n
                    local_psf = make_local_psf(psf, n_psf, guide_x, guide_y, sv_sigma_r, sv_sigma_a, $
                                               list_of_stars[n].x, list_of_stars[n].y)
@@ -1136,8 +1132,8 @@ print, "N_ITER = ",n_iter
 	                          noise_std, sv_par, x_bad, y_bad, id_par, $
 	                          corr_par, fit_par, fit_data, model_data, $
 	                          threshold_n, min_correlation, LOGFILE = logfp, _EXTRA = extra
-               flush,logfp
            endfor
+           if  logfp ne ""  then flush, logfp
 	   list_of_stars = sort_list(extract_stars(list_of_stars, n_stars))
 
            if  logfp ne ""  then printf,logfp, "Memory before bg:", memory()
@@ -1207,6 +1203,7 @@ print, "N_ITER = ",n_iter
 	         print, "STARFINDER: final re-fitting: iteration", iter + 1
            for  n = 0L, n_stars - 1  do begin
                if (guide_x NE "") then begin
+                   if  not keyword_set(silent) then $
                    print, "refit: making local psf for star ", n
                    local_psf = make_local_psf(psf, n_psf, guide_x, guide_y, sv_sigma_r, sv_sigma_a, $
                                               list_of_stars[n].x, list_of_stars[n].y)
