@@ -622,7 +622,7 @@ FUNCTION starfinder_fit_par, psf_in, psf_fwhm, n_psf, _EXTRA = extra
 	return, {fitting_box: fitting_box, edge: edge, $
 	         min_distance: min_distance, $
 	         fitting_psf: fitting_psf, psf: psf, $
-	         psf_max: psf_max, psf_fwhm: psf_fwhm}
+	         psf_max: psf_max, psf_fwhm: psf_fwhm, F_MAX: psf_max}
 end
 
 ; STARFINDER_DEB_PAR: define parameters for deblending.
