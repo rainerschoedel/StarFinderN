@@ -99,7 +99,10 @@
 ;	Updates:
 ;	1) Fixed bug on correlation maximization in module MATCH_REPLACE
 ;	   (Emiliano Diolaiti, July 2000).
-;-
+;
+;   2) Added the SAT_WIDTHS keyword to pass peak widths to avoid 
+;      errors when PEAK_WIDTH returns 0.
+;
 
 
 
@@ -118,10 +121,12 @@ PRO match_replace, image, template, x, y, box, search_box, $
 					 LX = lx, UX = ux, LY = ly, UY = uy)
 	star_ref = [x - lx, y - ly]  &  temp_ref = get_max(template)
 	upper = upper_surface[lx:ux,ly:uy]
+
 	if  n_elements(mag_fac) eq 0  then  mag_fac = 2
 	mag = round(mag_fac > 1)
 	if  mag gt 1  then $
 	   shifted_templates, template, mag, _EXTRA = extra, templates, dx, dy
+
 	; Find optimal position by cross-correlation maximization
 	w = where(star ge upper, count)
 	subs_to_coord, w, (size52(star, /DIM))[0], x_core, y_core
@@ -142,9 +147,15 @@ PRO match_replace, image, template, x, y, box, search_box, $
 	lx = lx + lxs  &  ly = ly + lys  &  upper = upper[lxs:uxs,lys:uys]
 	w = where(star lt upper)
 	scale = total(temp[w]*star[w])/total(temp[w]^2)
+	print, 'Parameters of repaired star:' +  strn(scale) + ', ' +  strn(x) + ', ' + strn(y) + '.'
+    sz = size(image)
+	model = image_model(x,y,scale,sz[1],sz[2],template)
+;	writefits, 'star_model.fits', model
+;	writefits, 'star_saturated.fits', star
 	; Repair image
 	w = where(star ge upper)
 	star[w] = scale * temp[w]
+;	writefits, 'star_repaired.fits', star
 	image[lx,ly] = star
 	return
 end
@@ -155,28 +166,36 @@ end
 
 PRO repair_saturated, image, clean_image, background, psf, psf_fwhm, x, y, $
 					  upper_lev, N_FWHM_MATCH = n_fwhm, N_WIDTH = n_width, $
-					  _EXTRA = extra
+					  PSF_POSITIONS=psf_positions, SAT_WIDTHS=sat_widths, _EXTRA = extra
 
-  help, n_width
-  help, n_fwhm
-	on_error, 2
+   space_var = (size52(psf, /N_DIM) eq 3) 
+   ext_widths = keyword_set(sat_widths)
+
+ 	on_error, 2
 	; The image to use to repair saturated stars must be:
 	; 1) background removed
 	; 2) cleaned from secondary stars around saturated ones.
+
 	sec_sources = image - clean_image
 	clean_image = temporary(clean_image) - background
 	upper_surf = upper_lev - background - sec_sources
+
 	; Match and repair saturated stars in clean_image
 	n_satur = n_elements(x)
 	if  n_elements(n_fwhm) eq 0  then  n_fwhm = 1
 	if  n_elements(n_width) eq 0  then  n_width = 3
 	for  n = 0L, n_satur - 1  do begin
-	   width = peak_width(clean_image, MAG = 1, X = x[n], Y = y[n], $
+	   if space_var then begin 
+	     local_psf = interpolate_psf(psf, psf_positions, x[n], y[n])
+         psf_fwhm = fwhm(local_psf)
+       endif else local_psf = psf
+	   if ext_widths then width = sat_widths[n] $
+	       else width = peak_width(clean_image, MAG = 1, X = x[n], Y = y[n], $
 	   					  ABS_THRESH = upper_surf)
-	   box = round(n_width * width) < min(size52(psf, /DIM))
+	   box = round(n_width * width) < min(size52(local_psf, /DIM))
 	   search_box = round(n_fwhm * psf_fwhm)
 	   x_n = x[n]  &  y_n = y[n]
-	   match_replace, clean_image, psf, x_n, y_n, box, search_box, upper_surf, _EXTRA = extra
+	   match_replace, clean_image, local_psf, x_n, y_n, box, search_box, upper_surf, _EXTRA = extra
 	   x[n] = x_n  &  y[n] = y_n
 	endfor
 	; Define clean_image = input image with repaired stars - secondary sources
