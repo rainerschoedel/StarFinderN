@@ -2,7 +2,7 @@
 ;
 ;+
 ; NAME:
-;	STARFINDER_NEW
+;	STARFINDER
 ;
 ; PURPOSE:
 ;	Given a stellar field and an approximation of the Point Spread Function,
@@ -32,9 +32,8 @@
 ;
 ;	Psf:	2D array, representing the Point Spread Function of the stellar
 ;		field. If the PSF is space-variant, Psf may be a 3D stack of local
-;		PSF measurements, relative to a partition of the imaged field into
-;		sub-regions arranged in a regular grid. In this case it is necessary
-;		to supply the bounds of the partition (see keyword SV_PAR).
+;		PSF measurements. When PSF_POSITIONS is provided, the PSF at each
+;		star's position is interpolated from the grid of PSFs.
 ;
 ;	Threshold:	Vector of lower detection levels (above the local background,
 ;		which is temporarly removed before detection). These levels are
@@ -58,16 +57,10 @@
 ;		stellar image and the Psf. It must be > 0 and < 1.
 ;
 ; KEYWORD PARAMETERS:
-;	SV_PAR:	Set this keyword to a structure defining the bounds of the
-;		imaged field partition when the PSF is not isoplanatic.
-;		Let the imaged field be partitioned into Nx*Ny sub-regions, such
-;		that the (j, i)-th region is bounded by
-;		Lx[j] < x < Ux[j], Ly[i] < y < Uy[i], where
-;		j = 0, ..., Nx - 1; i = 0, ..., Ny - 1.
-;		The structure must be defined as follows:
-;		SV_PAR = {Lx: Lx, Ux: Ux, Ly: Ly, Uy: Uy}.
-;		The (j, i)-th sub-region must correspond to the k-th psf in the 3D
-;		stack, where k = i*Nx + j.
+;
+;	PSF_POSITIONS:	2D array [n_psf, 2] containing the (x, y) positions of each PSF in the grid.
+;		Required when using a 3D PSF grid for spatially-variant PSF interpolation.
+;		Each row should contain the [x, y] coordinates of the corresponding PSF in psf[*,*,i].
 ;
 ;	REL_THRESHOLD:	Set this keyword to specify that the detection levels
 ;		contained in the input parameter Threshold have to be considered as
@@ -605,24 +598,41 @@ end
 
 ; STARFINDER_FIT_PAR: define parameters for fitting.
 
-FUNCTION starfinder_fit_par, psf_in, psf_fwhm, n_psf, _EXTRA = extra
+;FUNCTION starfinder_fit_par, psf_in, psf_fwhm, n_psf, _EXTRA = extra
+;
+;	on_error, 2
+;	fitting_box = define_fit_box(psf_fwhm, _EXTRA = extra)
+;	edge = 0.5
+;	min_distance = 0.5 * psf_fwhm
+;	psf = ptrarr(n_psf, /ALLOCATE)
+;	fitting_psf = ptrarr(n_psf, /ALLOCATE)
+;	psf_max = fltarr(n_psf)
+;	for  n = 0L, n_psf - 1  do begin
+;	   *psf[n] = psf_in[*,*,n]
+;	   *fitting_psf[n] = sub_array(*psf[n], 2*fitting_box[n])
+;	   psf_max[n] = max(*psf[n])
+;	endfor
+;	return, {fitting_box: fitting_box, edge: edge, $
+;	         min_distance: min_distance, $
+;	         fitting_psf: fitting_psf, psf: psf, $
+;	         psf_max: psf_max, psf_fwhm: psf_fwhm}
+;end
+
+FUNCTION starfinder_fit_par, psf_in, psf_fwhm, _EXTRA = extra
 
 	on_error, 2
 	fitting_box = define_fit_box(psf_fwhm, _EXTRA = extra)
 	edge = 0.5
 	min_distance = 0.5 * psf_fwhm
-	psf = ptrarr(n_psf, /ALLOCATE)
-	fitting_psf = ptrarr(n_psf, /ALLOCATE)
-	psf_max = fltarr(n_psf)
-	for  n = 0L, n_psf - 1  do begin
-	   *psf[n] = psf_in[*,*,n]
-	   *fitting_psf[n] = sub_array(*psf[n], 2*fitting_box[n])
-	   psf_max[n] = max(*psf[n])
-	endfor
+	psf = ptr_new(/ALLOCATE)
+	fitting_psf = ptr_new(/ALLOCATE)
+	*psf = psf_in[*,*]
+	*fitting_psf = sub_array(*psf, 2*fitting_box)
+	psf_max = max(*psf)
 	return, {fitting_box: fitting_box, edge: edge, $
 	         min_distance: min_distance, $
 	         fitting_psf: fitting_psf, psf: psf, $
-	         psf_max: psf_max, psf_fwhm: psf_fwhm, F_MAX: psf_max}
+	         psf_max: psf_max, psf_fwhm: psf_fwhm}
 end
 
 ; STARFINDER_DEB_PAR: define parameters for deblending.
@@ -677,7 +687,7 @@ end
 
 
 
-;;; Other auxiliary procedures/functions.
+;;; Other auxiliary procedures/functions
 
 ; STARFINDER_BAD: find bad pixels in the sub-image [lx:ux,ly:uy].
 
@@ -709,14 +719,12 @@ end
 
 ; STARFINDER_ID: re-identification of a presumed star.
 
-PRO starfinder_id, image, background, stars, sv_par, id_par, $
+PRO starfinder_id, image, background, stars, id_par, $
                    min_intensity, x, y, found
 
 	on_error, 2
-	if  n_elements(sv_par) ne 0  then $
-	   r = pick_region(sv_par.lx, sv_par.ux, sv_par.ly, sv_par.uy, x, y) $
-	else  r = 0
 	; Extract boxes
+	r = 0 ; take value from first PSF
 	starfinder_boxes, image, background, stars, x, y, id_par.box[r], $
 	                  lx, ux, ly, uy, i_box, b_box, s_box
 	; Search
@@ -732,14 +740,12 @@ end
 
 ; STARFINDER_CORRELATE: correlation check.
 
-PRO starfinder_correlate, image, background, stars, sv_par, x_bad, y_bad, $
+PRO starfinder_correlate, image, background, stars, x_bad, y_bad, $
                           corr_par, min_correlation, x, y, correl, accepted, LOGFILE = logfile
 
 	on_error, 2
-	if  n_elements(sv_par) ne 0  then $
-	   r = pick_region(sv_par.lx, sv_par.ux, sv_par.ly, sv_par.uy, x, y) $
-	else  r = 0
 	; Extract boxes
+	r = 0 ; take value from first PSF
 	boxsize = corr_par.correlation_box[r] + corr_par.search_box[r] + 1
 	starfinder_boxes, image, background, stars, x, y, boxsize, $
 	                  lx, ux, ly, uy, i_box, b_box, s_box, x_bad, y_bad, xb, yb
@@ -782,7 +788,7 @@ FUNCTION starfinder_check, fit_error, x_fit, y_fit, f_fit, $
 	                   UY = uy + fit_par.min_distance[r], list, n)
 	   extract_elements, list, SUBSCRIPTS = s, n, x, y, f
 	   if  n gt 1  then $
-	      good = min_pair_distance(x, y, THRESHOLD = fit_par.min_distance[r]) ge fit_par.min_distance[r]
+	      good = min(reciprocal_distance(x, y)) ge fit_par.min_distance[r]
 	endif
 	return, good
 end
@@ -790,15 +796,14 @@ end
 ; STARFINDER_FIT: local fitting.
 
 PRO starfinder_fit, list, this_max, image, siz, background, stars, noise_std, $
-                    sv_par, x_bad, y_bad, fit_par, fit_data, model_data, $
+                    x_bad, y_bad, fit_par, fit_data, model_data, $
                     min_intensity, NO_SLANT = no_slant, $
                     RE_FITTING = re_fitting, _EXTRA = extra, star_here
 
 	on_error, 2
 	extract_elements, list, SUBSCRIPTS = this_max, n, x, y
-	if  n_elements(sv_par) ne 0  then $
-	   r = pick_region(sv_par.lx, sv_par.ux, sv_par.ly, sv_par.uy, x, y) $
-	else  r = 0
+	
+	r = 0 ; take value of first PSF
 	; Extract boxes
 	starfinder_boxes, image, background,  stars, x, y, fit_par.fitting_box[r], $
 	                  lx, ux, ly, uy, i_box, b_box, s_box, x_bad, y_bad, xb, yb
@@ -882,16 +887,15 @@ end
 ; (partial or full de-blending).
 
 PRO starfinder_deblend, list, this_max, image, siz, background, stars, $
-                        noise_std, sv_par, x_bad, y_bad, id_par, fit_par, $
+                        noise_std, x_bad, y_bad, id_par, fit_par, $
                         deb_par, fit_data, model_data, min_intensity, $
                         AROUND = around, _EXTRA = extra
 
 	on_error, 2
 	extract_elements, list, SUB = this_max, n, x, y, f
 	x0 = round(x)  &  y0 = round(y)
-	if  n_elements(sv_par) ne 0  then $
-	   r = pick_region(sv_par.lx, sv_par.ux, sv_par.ly, sv_par.uy, x, y) $
-	else  r = 0
+	
+	r = 0 ; take value of first PSF
 	; Is the present object a blend?
 	if  keyword_set(around)  then $
 	   stars = temporary(stars) - image_model(x, y, f, siz[0], siz[1], $
@@ -927,7 +931,7 @@ PRO starfinder_deblend, list, this_max, image, siz, background, stars, $
 	         index = n_elements(list) - 1
 	      endif else  index = this_max
 	      starfinder_fit, list, index, image, siz, background, stars, $
-	      		          noise_std, sv_par, x_bad, y_bad, fit_par, fit_data, $
+	      		          noise_std, x_bad, y_bad, fit_par, fit_data, $
 	      		          model_data, min_intensity, _EXTRA = extra, star_here
 	   endif
 	   if  star_here  then  ncomp = ncomp + 1
@@ -945,7 +949,7 @@ end
 ; STARFINDER_ANALYZE: analyze the object list[this_max].
 
 PRO starfinder_analyze, list, this_max, image, siz, background, stars, $
-                        noise_std, sv_par, x_bad, y_bad, id_par, corr_par, $
+                        noise_std, x_bad, y_bad, id_par, corr_par, $
                         fit_par, fit_data, model_data, $
                         min_intensity, min_correlation, _EXTRA = extra, LOGFILE = logfile
 
@@ -954,13 +958,13 @@ PRO starfinder_analyze, list, this_max, image, siz, background, stars, $
         if keyword_set(logfile) then printf,logfile,"analysing star at",x,y
 
 	; Is the maximum list[this_max] a feature of an already detected star?
-	starfinder_id, image, background, stars, sv_par, id_par, $
+	starfinder_id, image, background, stars, id_par, $
 	               min_intensity, x, y, check
 	if  not check  then  return		    ; yes, it is
 
         if keyword_set(logfile) then printf,logfile,"not a feature of an already detected star"
 	; Correlation check
-	starfinder_correlate, image, background, stars, sv_par, x_bad, y_bad, $
+	starfinder_correlate, image, background, stars, x_bad, y_bad, $
 	                      corr_par, min_correlation, x, y, c, check, LOGFILE = logfile
 	if  not check  then  return   ; too low correlation
 
@@ -968,7 +972,7 @@ PRO starfinder_analyze, list, this_max, image, siz, background, stars, $
 	; Fit
 	update_list, list, SUB = this_max, x, y, 0, c
 	starfinder_fit, list, this_max, image, siz, background, stars, noise_std, $
-	                sv_par, x_bad, y_bad, fit_par, fit_data, model_data, $
+	                x_bad, y_bad, fit_par, fit_data, model_data, $
 	                min_intensity, _EXTRA = extra
 	return
 end
@@ -995,50 +999,45 @@ end
 ;;; The main routine.
 
 PRO starfinder, $
-	image, psf, SV_PAR = sv_par, $
-	X_BAD = x_bad, Y_BAD = y_bad, $
+	image, psf, X_BAD = x_bad, Y_BAD = y_bad, $
 	BACKGROUND = background, ESTIMATE_BG = estim_bg, BACK_BOX = back_box, $
 	threshold, REL_THRESHOLD = rel_threshold, NOISE_STD = noise_std, $
 	min_correlation, DEBLEND = deblend, DEBLOST = deblost, _EXTRA = extra, $
 	N_ITER = n_iter, NO_INTERMEDIATE_ITER = no_intermediate, SILENT = silent, $
-	GUIDE_X = guide_x, GUIDE_Y = guide_y, $
-	SV_SIGMA_R = sv_sigma_r, SV_SIGMA_A = sv_sigma_a, $
-   	x, y, fluxes, sigma_x, sigma_y, sigma_f, correlation, STARS = stars, $
+	PSF_POSITIONS = psf_positions, CLOSEST=closest,$
+	x, y, fluxes, sigma_x, sigma_y, sigma_f, correlation, STARS = stars, $
         LOGFILE = logfilename
 
-	if  not keyword_set(silent) then begin
-		print, "Starfinder:"
-		print, "Estimate bg = ", estim_bg
-		print, "threshold= ", threshold, ", REL_THRESHOLD = ", rel_threshold
-		print, "min_correlation = ",min_correlation
-		print, "DEBLEND = ",deblend
-		print, "N_ITER = ",n_iter
-	endif
-
+    print, "Starfinder........."
+	
 	if  not keyword_set(logfilename) then logfilename = "" $
-        else if not keyword_set(silent) then print, "LOGFILE = ",logfilename
-
-	;;catch, error
-	;;if  error ne 0  then begin
-        ;;    print,"starfinder encountered an error"
-        ;;    print,"the details are top secret and may not leave IDL"
-	;;   starfinder_dealloc, fit_data, model_data, corr_par, fit_par
-	;;   return
-	;;endif
+        else print, "LOGFILE = ",logfilename
 
 	; Define some program parameters and default values
 	if  n_elements(n_iter) eq 0  then  n_iter = 1
 	if  size52(psf, /N_DIM) eq 3  then $
 	   n_psf = (size52(psf, /DIM))[2]  else  n_psf = 1
+	; Validate PSF_POSITIONS if provided
+	if keyword_set(psf_positions) then begin
+		if n_psf eq 1 then begin
+			message, /CONTINUE, 'PSF_POSITIONS provided but PSF is 2D. PSF_POSITIONS will be ignored.'
+		endif else if n_elements(psf_positions) ne n_psf * 2 then begin
+			message, /CONTINUE, 'PSF_POSITIONS must have n_psf * 2 elements.'
+			psf_positions = 0
+		endif
+		; Reshape psf_positions to [n_psf, 2] if needed
+		if n_elements(size52(psf_positions, /DIM)) eq 1 then begin
+			psf_positions = reform(psf_positions, n_psf, 2)
+		endif
+	endif
+	
 	psf_fwhm = starfinder_fwhm(psf, n_psf)
 	id_par   = starfinder_id_par(psf_fwhm, _EXTRA = extra)
 	corr_par = starfinder_corr_par(psf, psf_fwhm, n_psf, _EXTRA = extra)
-	fit_par  = starfinder_fit_par( psf, psf_fwhm, n_psf)
+	fit_par  = starfinder_fit_par(psf, psf_fwhm)
 	if  keyword_set(deblend) or keyword_set(deblost)  then $
 	   deb_par = starfinder_deb_par(psf, psf_fwhm, n_psf, _EXTRA = extra)
-	if  n_elements(sv_par) eq 0  then begin
-	   fit_data = ptr_new(/ALLOCATE)  &  model_data = ptr_new(/ALLOCATE)
-	endif
+    fit_data = ptr_new(/ALLOCATE)  &  model_data = ptr_new(/ALLOCATE)
 
 	; Define background and image model
 	siz = size52(image, /DIM)
@@ -1080,23 +1079,19 @@ PRO starfinder, $
 	;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 	; Phase 1: find local maxima having
 	; central intensity > known stars + background + threshold
+	; Search should be performed on an image with BAD PIXELS REPAIRED!
         ;
 	if  not keyword_set(silent)  then $
 	   print, "STARFINDER: search for suspected stars"
+	
 	search_objects, image - stars, LOW_SURFACE = background, threshold_n, $
 	                _EXTRA = extra, n_max, x0, y0, i0
+;	objs = image_model(x0,y0,i0, siz[0], siz[1], psf, PSF_POSITIONS=psf_positions)
+;    writefits, 'found.fits', objs
+;    STOP
 	n_presumed = n_presumed + n_max
 
         if  logfilename ne ""  then printf, logfp, n_max, " suspected stars"
-
-        ;; write out list to see what''s going on
-        ;openw,unit47,'/disk-a/koehler/TrapezFinder/list_of_presumed_stars.txt',/get_lun
-        ;print,"print to debug, ",n_max," stars"
-        ;for n = 0, n_max-1 do begin
-        ;    ;print,n
-        ;    printf,unit47,n,x0[n],y0[n]
-        ;endfor
-        ;close,unit47
 
 	;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 	; Phase 2: analyze presumed stars with correlation and fitting,
@@ -1109,31 +1104,35 @@ PRO starfinder, $
 	   list_of_stars = merge_list(list_of_stars, sort_list(list_of_max))
 
            if  logfp ne ""  then printf,logfp, "analysing star ", n_stars, " to ", n_stars - 1 + n_max
-           if  not keyword_set(silent) then $
            print, "analysing star ", n_stars, " to ", n_stars - 1 + n_max
+
 	   for  n = n_stars, n_stars - 1 + n_max  do begin
                if  logfp ne ""  then printf,logfp,"star no.",n
-               if (guide_x NE "") then begin
-                   if  not keyword_set(silent) then $
-                   print, "making local psf for star ", n
-                   local_psf = make_local_psf(psf, n_psf, guide_x, guide_y, sv_sigma_r, sv_sigma_a, $
-                                              list_of_stars[n].x, list_of_stars[n].y)
+               if (n_psf gt 1) then begin
+                   ; Interpolate PSF at star position if PSF_POSITIONS is provided
+                   if keyword_set(psf_positions) then begin
+                       local_psf = interpolate_psf(psf, psf_positions, list_of_stars[n].x, list_of_stars[n].y,CLOSEST=closest)
+                   endif else begin
+                       ; Fall back to old make_local_psf if no positions provided
+                       local_psf = make_local_psf(psf, n_psf, list_of_stars[n].x, list_of_stars[n].y)
+                   endelse
+               endif else local_psf = psf
+ 
+               ; free memory before allocating it again
+               starfinder_deall_corr, corr_par
+               starfinder_deall_fit, fit_par
 
-                                ; free memory before allocating it again
-                   starfinder_deall_corr, corr_par
-                   starfinder_deall_fit, fit_par
-
-                   psf_fwhm = starfinder_fwhm( local_psf, 1)
-                   id_par   = starfinder_id_par(psf_fwhm, _EXTRA = extra)
-                   corr_par = starfinder_corr_par(local_psf, psf_fwhm, 1, _EXTRA = extra)
-                   fit_par  = starfinder_fit_par( local_psf, psf_fwhm, 1)
-               end
+               psf_fwhm = starfinder_fwhm(local_psf, 1)
+               id_par   = starfinder_id_par(psf_fwhm, _EXTRA = extra)
+               corr_par = starfinder_corr_par(local_psf, psf_fwhm, 1, _EXTRA = extra)
+               fit_par  = starfinder_fit_par(local_psf, psf_fwhm)
+              
                starfinder_analyze, list_of_stars, n, image, siz, background, stars, $
-	                          noise_std, sv_par, x_bad, y_bad, id_par, $
+	                          noise_std, x_bad, y_bad, id_par, $
 	                          corr_par, fit_par, fit_data, model_data, $
 	                          threshold_n, min_correlation, LOGFILE = logfp, _EXTRA = extra
-           endfor
-           if  logfp ne ""  then flush, logfp
+               flush,logfp
+       endfor
 	   list_of_stars = sort_list(extract_stars(list_of_stars, n_stars))
 
            if  logfp ne ""  then printf,logfp, "Memory before bg:", memory()
@@ -1147,7 +1146,7 @@ PRO starfinder, $
 
 	   ; Modify fitting parameters for subsequent operations
 	   starfinder_deall_fit, fit_par
-	   fit_par = starfinder_fit_par(psf, psf_fwhm, n_psf, /WIDER)
+	   fit_par = starfinder_fit_par(psf, psf_fwhm)
 	   if  ptr_valid(fit_data)  then  ptr_free, fit_data
 	endif	; n_max ne 0
 
@@ -1160,7 +1159,7 @@ PRO starfinder, $
 	   ; Check each detected star: is it a blend?
 	   for  n = 0L, n_stars - 1  do $
 	      starfinder_deblend, list_of_stars, n, image, siz, background, stars, $
-	                          noise_std, sv_par, x_bad, y_bad, id_par, $
+	                          noise_std, x_bad, y_bad, id_par, $
 	                          fit_par, deb_par, fit_data, model_data, $
 	                          threshold_n, _EXTRA = extra, /AROUND
 	   list_of_stars = sort_list(extract_stars(list_of_stars, n_stars))
@@ -1180,7 +1179,7 @@ PRO starfinder, $
 	      list_of_stars = merge_list(list_of_stars, sort_list(list_of_max))
 	      for  n = n_stars, n_stars - 1 + n_max  do $
 	         starfinder_deblend, list_of_stars, n, image, siz, background, stars, $
-	                             noise_std, sv_par, x_bad, y_bad, id_par, fit_par, $
+	                             noise_std, x_bad, y_bad, id_par, fit_par, $
 	                             deb_par, fit_data, model_data, threshold_n, $
 	                             _EXTRA = extra
 	      list_of_stars = sort_list(extract_stars(list_of_stars, n_stars))
@@ -1201,35 +1200,49 @@ PRO starfinder, $
 	      if  n_lev lt n_levels - 1  then $
 	         print, "STARFINDER: intermediate re-fitting"  else $
 	         print, "STARFINDER: final re-fitting: iteration", iter + 1
-           for  n = 0L, n_stars - 1  do begin
-               if (guide_x NE "") then begin
-                   if  not keyword_set(silent) then $
-                   print, "refit: making local psf for star ", n
-                   local_psf = make_local_psf(psf, n_psf, guide_x, guide_y, sv_sigma_r, sv_sigma_a, $
-                                              list_of_stars[n].x, list_of_stars[n].y)
+             print, 'There are ' + strn(n_stars) + ' stars to fit.'
+             for  n = 0L, n_stars - 1  do begin
+           
+               if  logfp ne ""  then printf,logfp,"star no.",n
+               if (n_psf gt 1) then begin
+                   ; Interpolate PSF at star position if PSF_POSITIONS is provided
+                   if keyword_set(psf_positions) then begin
+                       local_psf = interpolate_psf(psf, psf_positions, list_of_stars[n].x, list_of_stars[n].y,CLOSEST=closest)
+                   endif else begin
+                       ; Fall back to old make_local_psf if no positions provided
+                       local_psf = make_local_psf(psf, n_psf, list_of_stars[n].x, list_of_stars[n].y)
+                   endelse
+               endif else local_psf = psf
+ 
+               ; free memory before allocating it again
+               starfinder_deall_corr, corr_par
+               starfinder_deall_fit, fit_par
 
-		; free memory before allocating it again
-                   starfinder_deall_fit, fit_par
+               psf_fwhm = starfinder_fwhm(local_psf, 1)
+               id_par   = starfinder_id_par(psf_fwhm, _EXTRA = extra)
+               corr_par = starfinder_corr_par(local_psf, psf_fwhm, 1, _EXTRA = extra)
+               fit_par  = starfinder_fit_par(local_psf, psf_fwhm)
 
-                   psf_fwhm = starfinder_fwhm( local_psf, 1)
-                   fit_par  = starfinder_fit_par( local_psf, psf_fwhm, 1)
-               end
                starfinder_fit, list_of_stars, n, image, siz, background, stars, $
-	                      noise_std, sv_par, x_bad, y_bad, fit_par, fit_data, $
+	                      noise_std, x_bad, y_bad, fit_par, fit_data, $
 	                      model_data, threshold_n, /RE_FITTING, _EXTRA = extra
-           endfor
+;	           print, "Fitted star no.",n
+             endfor
+           
 	   if  maxit gt 1  then $
 	      converging = starfinder_converg(list0, list_of_stars, _EXTRA = extra)
 	   iter = iter + 1  &  list0 = list_of_stars
 	endwhile
 	starfinder_deall_fit, fit_par
-	fit_par = starfinder_fit_par(psf, psf_fwhm, n_psf)
+
+; Not sure why the next line is here. I have commented it in order to avoid an error
+;	fit_par = starfinder_fit_par(psf, psf_fwhm, n_psf)
+
 	if  ptr_valid(fit_data)  then  ptr_free, fit_data
 
-	endfor
+	endfor ; for  n_lev = 0L, n_levels - 1  do begin
     ;;; end of cycle on threshold levels
         if  logfp ne ""  then close, logfp
-
 
 	; De-allocate pointer heap variables
 	starfinder_dealloc, fit_data, model_data, corr_par, fit_par
